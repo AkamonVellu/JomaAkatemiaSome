@@ -695,10 +695,19 @@
   }
   .lineup-cell .pl-photo {
     width: 100%;
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     object-fit: cover;
     object-position: 50% 18%;
     background: linear-gradient(160deg, #221015, #0e0e0e);
+  }
+  /* Cutout-pelaaja: läpinäkyvä, istuu solun punertavalle taustalle */
+  .lineup-cell .pl-photo.cutout {
+    object-fit: contain;
+    object-position: 50% 88%;
+    background: radial-gradient(ellipse 80% 70% at 50% 30%, rgba(120,15,28,0.55), rgba(14,14,14,0.2) 70%),
+                linear-gradient(160deg, #2a1015, #0e0e0e);
+    filter: drop-shadow(0 6px 12px rgba(0,0,0,0.6));
   }
   .lineup-cell .pl-photo.placeholder {
     display: flex; align-items: center; justify-content: center;
@@ -727,7 +736,7 @@
   }
   .lineup-cell .pl-name {
     position: relative;
-    background: linear-gradient(to top, var(--red-dark), rgba(143,10,31,0.0));
+    background: linear-gradient(to top, #1a0508, var(--red-dark));
     color: #fff;
     font-family: 'Barlow Condensed', sans-serif;
     font-weight: 700;
@@ -735,12 +744,13 @@
     letter-spacing: 0.5px;
     text-transform: uppercase;
     text-align: center;
-    padding: 14px 4px 7px;
+    padding: 9px 4px 8px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: -30px;
-    z-index: 2;
+    z-index: 4;
+    flex-shrink: 0;
+    border-top: 1px solid rgba(212,175,55,0.3);
   }
 
   /* ===== TULOS — dynaaminen ===== */
@@ -930,6 +940,7 @@ const data = {
   },
   lineup: {
     league: 'MIESTEN SUOMENSARJA',
+    cutout: true,
     players: [
       { num: '1', name: 'Kakkinen', role: 'S' },
       { num: '2', name: 'Virkkala', role: '2V' },
@@ -1065,9 +1076,10 @@ function promoLogo(src, fallback) {
 // ---- OTTELUENNAKKO / KOKOONPANO ----
 function renderLineup() {
   const d = data.lineup;
+  const photoCls = d.cutout === false ? 'pl-photo' : 'pl-photo cutout';
   const cells = d.players.map(p => {
     const photo = p.photo
-      ? `<img class="pl-photo" src="${p.photo}" alt="">`
+      ? `<img class="${photoCls}" src="${p.photo}" alt="">`
       : `<div class="pl-photo placeholder">kuva</div>`;
     return `
       <div class="lineup-cell">
@@ -1244,6 +1256,10 @@ function renderEditor() {
     html = `
       <h3>Otteluennakko</h3>
       ${field('Sarja', 'l-league', d.league)}
+      <label style="display:flex; align-items:center; gap:8px; font-size:11px; color:#ccc; margin:8px 0; cursor:pointer;">
+        <input type="checkbox" id="l-cutout" ${d.cutout !== false ? 'checked' : ''}>
+        Poista valkoinen tausta pelaajakuvista (studiokuvat)
+      </label>
       <div class="panel-section-label">Pelaajat (max 12)</div>
       ${playerFields}
       ${sharedLogoSection()}
@@ -1311,7 +1327,10 @@ function bindEditorEvents() {
       const i = +e.target.dataset.lpPhoto;
       const f = e.target.files[0];
       if (!f) return;
-      data.lineup.players[i].photo = await processPhoto(f, 400);
+      showToast('Poistetaan taustaa...');
+      data.lineup.players[i].photo = data.lineup.cutout === false
+        ? await processPhoto(f, 500)
+        : await processCutout(f, 500);
       renderEditor();
       renderGraphic();
       saveState();
@@ -1358,6 +1377,11 @@ function bindEditorEvents() {
   if (rCut) rCut.addEventListener('change', e => {
     data.result.heroCutout = e.target.checked;
     renderGraphic(); saveState();
+  });
+  const lCut = document.getElementById('l-cutout');
+  if (lCut) lCut.addEventListener('change', e => {
+    data.lineup.cutout = e.target.checked;
+    saveState();
   });
 }
 
@@ -1417,6 +1441,19 @@ function processCutout(file, maxW = 900) {
         const imgData = ctx.getImageData(0, 0, w, h);
         const px = imgData.data;
         const N = w * h;
+
+        // Jos kuva on jo läpinäkyvä (esim. hahmokuva tai valmis cutout-PNG),
+        // ei poisteta mitään — käytetään sellaisenaan.
+        let transparentCount = 0;
+        for (let i = 0; i < N; i += 17) { // näytteistä joka 17. pikseli nopeasti
+          if (px[i*4+3] < 200) transparentCount++;
+        }
+        const sampleSize = Math.ceil(N / 17);
+        if (transparentCount / sampleSize > 0.12) {
+          // Yli 12% läpinäkyvää -> jo cutout, palauta skaalattuna sellaisenaan
+          resolve(canvas.toDataURL('image/png'));
+          return;
+        }
 
         // bg-kandidaatti: kirkas + neutraali (valkoinen tausta)
         // Kaksi tasoa: "varma tausta" (tiukka) flood-seediksi, "mahdollinen" laajennukseen
